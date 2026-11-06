@@ -6,7 +6,7 @@ Fictional company: **Northwind Solar Co-op**, a residential solar installer. All
 
 Built in **n8n**: Webhook → NormalizeLead → Data Table dedupe → Insert → HTTP mock enrichment → ScoreLead → Switch (hot / warm / cold) → Respond.
 
-> Status: Intake, dedupe, enrichment, scoring and routing are complete (the live build accepted new leads and scored a sample "get a quote" lead at 100 / hot). A separate error-alert workflow is the same pattern as `Northwind Error Alerts` in the support-ops-agent repo; hook that workflow in Settings → Error Workflow after import.
+> Status: Intake, dedupe, enrichment, scoring, routing, and error alerts are complete. The live build accepted a sample "get a quote" lead at 100 / hot, returned `duplicate` on a replay of the same email, posted a Discord alert to `#automation-alerts` when enrichment was temporarily broken, and accepted a new lead at 100 / hot after the URL was restored.
 
 ## Architecture
 
@@ -59,6 +59,30 @@ Example from the live build: `Maria.Lopez@Example.com`, phone present, `formInte
 
 A second post of the same email returns `{ "status": "duplicate" }` and does not insert again.
 
+
+## Error alerts
+
+This router uses the same `Northwind Error Alerts` workflow as [support-ops-agent](https://github.com/latin-guru/support-ops-agent). Import that workflow, publish it, and set it under **Settings → Error Workflow**. Escalations and system failures stay on separate Discord channels on purpose (`#support-escalations` vs `#automation-alerts`). The Discord webhook credential is not copied into this repo.
+
+A dummy "Fetch Test Event" from n8n produces a placeholder alert (`Example Workflow`). A real failure needs a real broken step: in the live build the enrichment URL was temporarily pointed at a missing resource, a new sample email was posted, and the alert named **Northwind Lead Router**, failed step **HTTP Request**, and `The resource you are requesting could not be found` (Nov 6, 2026, 4:42 AM ET).
+
+![Error workflow setting](docs/screenshots/error-workflow-settings.png)
+
+![Failure alert in Discord after a broken enrichment URL](docs/screenshots/discord-error-alert.png)
+
+## Test results
+
+| Step | What was posted | Result |
+|---|---|---|
+| New lead | `maria.soto@example.com`, phone present, `formIntent: "request a quote"` | Accepted, score 100, tier hot |
+| Replay | Same Maria email again | `{ "status": "duplicate" }` — no second row |
+| Broken enrichment | `alex.nguyen@example.com` while the HTTP URL was invalid | Caller got `{ "message": "Error in workflow" }`; Discord `#automation-alerts` named Northwind Lead Router / HTTP Request / resource not found (4:42 AM ET) |
+| Restored path | `jordan.lee@example.com` after the enrichment URL was put back | Accepted, score 100, tier hot |
+
+Terminal proof (host URL, webhook path, and machine username covered):
+
+![Terminal: duplicate, error, then accepted 100 / hot](docs/screenshots/terminal-test-results.png)
+
 ## Sample requests
 
 Replace `YOUR_N8N_HOST` with your n8n instance. Use the **Listen for test event** URL while you are building (`/webhook-test/lead-intake`), then the production URL (`/webhook/lead-intake`) after you publish the workflow.
@@ -102,7 +126,7 @@ The exported workflow was cleaned with `scripts/sanitize_workflow.py`: instance 
 
 - **Mock enrichment.** The HTTP call uses a public placeholder API, not a real company database. Production would use a real enrichment provider, with the same retry and error-workflow pattern.
 - **Routing actions.** The Switch branches exist; they currently all return the same 202 body. Next step is a formatted Discord (or Slack) message for hot leads, a nurture table for warm, and a review table for cold, plus optional round-robin assignment to fake reps.
-- **Error workflow.** Designed and used on the companion support agent; wiring it to this router and capturing a broken-enrichment screenshot is the remaining packaging step.
+- **Error workflow.** Proven on this router with the shared `Northwind Error Alerts` workflow from the companion support-ops-agent repo (Settings → Error Workflow). A temporary bad enrichment URL produced `Error in workflow` for the caller and a Discord alert in `#automation-alerts` with the workflow name, failed step, and error text.
 - **Validation.** Missing required fields are not yet rejected with a 400 / dead-letter row.
 - **Sample scale.** Built on an n8n Cloud trial with a small Data Table of test leads.
 
